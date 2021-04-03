@@ -4,10 +4,13 @@ import itertools
 from shapely.geometry import Point, Polygon, MultiPolygon
 import numpy as np
 from sklearn.neighbors import BallTree
+import boto3
+import botocore
+from datetime import datetime
 
 class SpatialIndex:
     
-    def __init__(self, fname):
+    def __init__(self, fname=None):
         
         self.fname = fname
         self.corner_pts_df = None
@@ -92,3 +95,96 @@ class SpatialIndexLS8(SpatialIndex):
                 selection_idx.append(idx)
 
         return selection_idx
+    
+    def search_s3(self, pr_idx):
+        s3_pathrow = '{:03d}/{:03d}'.format(self.footprint.loc[pr_idx].path, self.footprint.loc[pr_idx].row)
+        s3_prefix = 'c1/L8/' + s3_pathrow + '/LC08_L1TP_'
+        # print(s3_prefix)
+
+        # according to https://github.com/boto/boto3/issues/1200
+        s3 = boto3.client('s3', region_name='us-west-2', config=botocore.config.Config(signature_version=botocore.UNSIGNED))
+
+        # https://towardsdatascience.com/working-with-amazon-s3-buckets-with-boto3-785252ea22e0
+        response = s3.list_objects_v2(Bucket="landsat-pds", MaxKeys=1000, Prefix=s3_prefix, Delimiter='/')
+
+        scene_list = pd.DataFrame(columns=('prefix', 'time', 'tier'))
+        scene_idx = 0
+
+        if response.get('CommonPrefixes') is None:
+            # print('No available scenes!')
+            pass
+        else:
+            for scene in response.get('CommonPrefixes'):
+                scene_prefix = scene.get('Prefix')
+                # print(scene.get('Prefix'))
+                timestamp = scene_prefix.split('_')[3]
+                timestamp = datetime.strptime(timestamp, '%Y%m%d')
+                timestamp = timestamp.date()
+                tierstate = scene_prefix.split('_')[6][:-1]
+                # print(timestamp, tierstate)
+                scene_list.loc[scene_idx] = [scene_prefix, timestamp,  tierstate]
+                scene_idx += 1
+
+        return s3_prefix, scene_list
+    
+
+class SpatialIndexITSLIVE(SpatialIndex):
+    # modified from https://github.com/nasa-jpl/itslive
+    @staticmethod
+    def get_granule_urls(params):
+        '''
+        params example:
+        params = {'polygon': '-50.0783,69.6975,-50.0783,69.6995,-50.0763,69.6995,-50.0763,69.6975,-50.0783,69.6975', 
+            'percent_valid_pixels': 1, 'start': '2017-08-29', 'end': '2019-03-31'}
+        '''
+        base_url = 'https://nsidc.org/apps/itslive-search/velocities/urls'
+        resp = requests.get(base_url, params=params, verify=False)
+        return resp.json()
+    
+    @staticmethod
+    def get_minimal_bbox(query_pt):
+        """
+        a very rough approximation of a small bbox less than 1km of a given lon-lat point
+        params: geometry, a geojson point geometry
+        """
+        lon = query_pt[0]
+        lat = query_pt[1]
+        lon_offset = -0.001 if lon < 0.0 else 0.001
+        lat_offset = -0.001 if lat < 0.0 else 0.001
+
+        bbox = box(lon - lon_offset, lat - lat_offset, lon + lon_offset, lat + lat_offset)
+        coords = [[str(float("{:.4f}".format(coord[0]))),str(float("{:.4f}".format(coord[1])))] for coord in bbox.exterior.coords]
+        coords = list(itertools.chain.from_iterable(coords))
+        return ','.join(coords)
+    
+    @staticmethod
+    def parse_urls(urls):
+        '''
+        parse urls
+        '''
+        pr_dict = {}
+        for url_dict in urls:
+            file_name = os.path.basename(url_dict['url'])
+            # LC08_L1TP_009011_20181002_20181010_01_T1_X_LC08_L1GT_009011_20180308_20180308_01_RT_G0240V01_P036.nc
+            file_components = file_name.split('_')
+            prstr = file_components[2]
+            prstr = prstr[:3] + '/' + prstr[-3:]
+            start_date = datetime.strptime(file_components[11], "%Y%m%d").date()
+            end_date = datetime.strptime(file_components[3], "%Y%m%d").date()
+            pair_days = end_date - start_date
+            img1_tier = file_components[14]
+            img2_tier = file_components[6]
+            if img1_tier != 'RT' and img2_tier != 'RT':      # For now let's show results using T1 images only
+                if prstr == '083/232':
+                    print(url_dict['url'])
+                start_date_str = start_date.strftime('%Y-%m-%d')
+                end_date_str = end_date.strftime('%Y-%m-%d')
+                entrystr = ' / '.join((start_date_str, end_date_str, f'{pair_days.days} days'))
+                if prstr in pr_dict:
+                    pr_dict[prstr].append(entrystr)
+                else:
+                    pr_dict[prstr] = [entrystr]
+        
+        for key in pr_dict:
+            pr_dict[key].sort()
+        return pr_dict
