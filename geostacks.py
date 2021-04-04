@@ -1,9 +1,11 @@
+import os
 import pandas as pd
 import geopandas as gpd
 import itertools
-from shapely.geometry import Point, Polygon, MultiPolygon
+from shapely.geometry import Point, Polygon, MultiPolygon, box
 import numpy as np
 from sklearn.neighbors import BallTree
+import requests
 import boto3
 import botocore
 from datetime import datetime
@@ -175,16 +177,17 @@ class SpatialIndexITSLIVE(SpatialIndex):
             img1_tier = file_components[14]
             img2_tier = file_components[6]
             if img1_tier != 'RT' and img2_tier != 'RT':      # For now let's show results using T1 images only
-                if prstr == '083/232':
-                    print(url_dict['url'])
+                # if prstr == '083/232':
+                #     print(url_dict['url'])
                 start_date_str = start_date.strftime('%Y-%m-%d')
                 end_date_str = end_date.strftime('%Y-%m-%d')
                 entrystr = ' / '.join((start_date_str, end_date_str, f'{pair_days.days} days'))
+                pr_dict_entry = {'entrystr': entrystr, 'url': url_dict['url']}
                 if prstr in pr_dict:
-                    pr_dict[prstr].append(entrystr)
+                    pr_dict[prstr].append(pr_dict_entry)
                 else:
-                    pr_dict[prstr] = [entrystr]
-        
+                    pr_dict[prstr] = [pr_dict_entry]
+                
         for key in pr_dict:
-            pr_dict[key].sort()
+            pr_dict[key].sort(key=lambda x: x.get('entrystr'))
         return pr_dict
