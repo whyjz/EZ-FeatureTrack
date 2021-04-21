@@ -1,6 +1,8 @@
-# 4.0.0-rc7
-FROM hysds/dev:v4.0.0-rc.7
+######## [1] ########
+# Create ISCE RPM
 
+# Use hysds/dev:v4.0.0-rc.7
+FROM hysds/dev:v4.0.0-rc.7
 
 # Set an encoding to make things work smoothly.
 ENV LANG en_US.UTF-8
@@ -10,21 +12,6 @@ ENV ISCE_ORG isce-framework
 
 # set to root user
 USER root
-
-# Binder settings (creating a jovyan user instead of using root)
-# ARG NB_USER=jovyan
-# ARG NB_UID=1000
-# ENV USER ${NB_USER}
-# ENV NB_UID ${NB_UID}
-# ENV HOME /home/${NB_USER}
-# RUN adduser \
-#     --comment "Default user" \
-#     --uid ${NB_UID} \
-#     ${NB_USER}
-# RUN adduser --disabled-password \
-#     --gecos "Default user" \
-#     --uid ${NB_UID} \
-#     ${NB_USER}
 
 # install tools for RPM generation
 RUN set -ex \
@@ -73,14 +60,7 @@ RUN set -ex \
  && cd /lib64 \
  && ( test -f libgfortran.so || ln -sv libgfortran.so.*.* libgfortran.so )
 
-# get repo
-# RUN set -ex \
-#  && git clone https://github.com/isce-framework/isce2.git
- 
-# copy repo
-# COPY ./isce2 /opt/isce2/src/isce2
-
-# build ISCE
+# get repo and build ISCE (isce2: whyjay patch)
 RUN set -ex \
  && . /opt/conda/bin/activate root \
  && cd /opt/isce2/src \
@@ -104,13 +84,28 @@ RUN set -ex \
       --maintainer=piyush.agram@jpl.nasa.gov \
       --description="InSAR Scientific Computing Environment v2 (${hash})"
 
-# hysds/pge-base: v4.0.0
+######## [2] ########
+# Install ISCE from RPM and other packages
+
+# Use hysds/pge-base:v4.0.0
+# This comes with a user called "ops" with UID of 1000
 FROM hysds/pge-base:v4.0.0
+
+# Make sure we are using the ops user
+USER ops
 
 # Set an encoding to make things work smoothly.
 ENV LANG en_US.UTF-8
 
-# install ISCE from RPM
+# install jupyter interface (https://mybinder.readthedocs.io/en/latest/tutorials/dockerfile.html)
+RUN set -ex \
+ && sudo /opt/conda/bin/pip install --no-cache-dir notebook jupyterlab
+
+# Override home dir with /tmp to avoid write permission issues
+ENV HOME /tmp
+WORKDIR ${HOME}
+
+# copy the ISCE RPM to hysds/pge-base: v4.0.0
 COPY --from=0 /tmp/isce-2.4.2-1.x86_64.rpm /tmp/isce-2.4.2-1.x86_64.rpm
 
 # install isce and its minimal requirements
@@ -140,22 +135,18 @@ RUN set -ex \
  && sudo rm /tmp/isce-2.4.2-1.x86_64.rpm
 
 # install jupyter interface (https://mybinder.readthedocs.io/en/latest/tutorials/dockerfile.html)
-RUN set -ex \
- && sudo /opt/conda/bin/conda install --yes \
-      jupyter \
-      jupyterlab \
- && sudo /opt/conda/bin/pip install --no-cache-dir notebook==5.*
+# RUN set -ex \
+#  && sudo /opt/conda/bin/conda install --yes \
+#       jupyter \
+#       jupyterlab \
+#  && sudo /opt/conda/bin/pip install --no-cache-dir notebook==5.*
 
 # set up environment variables
 ENV PYTHONPATH="/opt/isce2:${PYTHONPATH}" PATH="/opt/isce2/isce/applications:$PATH"
 
-# Install CARST
+# Install CARST and scikit-image (the latter will be installed with CARST in the future)
 RUN set -ex \
- && sudo /opt/conda/bin/pip install carst
-
-# Install scikit-image (which will be installed with CARST in the future)
-RUN set -ex \
- && sudo /opt/conda/bin/pip install scikit-image
+ && sudo /opt/conda/bin/pip install carst scikit-image
 
 # Install other imagexs required by EZTrack
 RUN set -ex \
