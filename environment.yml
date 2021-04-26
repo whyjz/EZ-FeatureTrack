@@ -1,0 +1,23 @@
+name: eztrack
+
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - isce2
+  - pip
+  - curl=7.75.0
+  - pip:
+    - carst
+    - scikit-image
+    - scikit-learn
+    - boto3
+    - xarray
+    - ipyleaflet
+    - fsspec
+    - xlrd
+    - openpyxl
+    - netcdf4
+    - requests
+    - aiohttp
+    - h5netcdf

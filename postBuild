@@ -1,0 +1,11 @@
+#!/bin/bash
+
+set -ex
+
+# ls /srv/conda/envs/notebook/lib/python3.7/site-packages
+# cat Dockerfile_bk
+
+isce_init=$(python -c "import isce; print('loc:' + isce.__file__)")
+isce_init=${isce_init##*loc:}
+echo "replacing ${isce_init%/*}/components/iscesys/ImageApi/DataAccessorPy.py with DataAccessorPy.py..."
+cp DataAccessorPy.py ${isce_init%/*}/components/iscesys/ImageApi/DataAccessorPy.py
