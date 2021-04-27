@@ -2,8 +2,8 @@
 
 set -ex
 
-# ls /srv/conda/envs/notebook/lib/python3.7/site-packages
-# cat Dockerfile_bk
+# This is to solve as issue that ISCE does not support a VRT to read from a remote file identified with a URL.
+# See https://github.com/isce-framework/isce2/pull/245 for more information.
 
 isce_init=$(python -c "import isce; print('loc:' + isce.__file__)")
 isce_init=${isce_init##*loc:}
