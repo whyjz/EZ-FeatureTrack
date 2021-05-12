@@ -15,6 +15,7 @@ from geostacks import SpatialIndexLS8, SpatialIndexITSLIVE
 import xarray as xr
 import rasterio
 import fsspec
+from datetime import datetime
 
 # Adapted from Alice's AGU talk
 
@@ -41,6 +42,7 @@ class eztrack_ui():
         self.spatial_index = spatial_index
         self.output = None       # print message output
         self.results = None
+        self.ft_params = None     # feature tracking parameters
         
     def init_panelleft(self):
         self.ui_title = iwg.HTML("<h2>Drag the marker to your region of interest</h2>")
@@ -64,9 +66,14 @@ class eztrack_ui():
         self.map_polygon = ilfl.WKTLayer(wkt_string=self.spatial_index.footprint.loc[self.pr_selection].geometry.wkt)
         self.mainmap.add_layer(self.map_polygon)
         
-    def gen_ui(self, spatial_index=None):
+    def gen_ui(self, spatial_index=None, ft_params=None):
         if self.spatial_index is None:
             self.spatial_index = spatial_index
+            
+        if ft_params is None:
+            self.init_ft_params()
+        else:
+            self.ft_params = ft_params
         
         self.init_panelleft()
         self.init_panelright()
@@ -137,24 +144,95 @@ class eztrack_ui():
                 file1_date = selected_list_time[0].strftime('%Y-%m-%d')
                 file2_date = selected_list_time[1].strftime('%Y-%m-%d')
                 print(file1_url, file1_date, file2_url, file2_date)
-                carst_featuretrack(file1_url, file1_date, file2_url, file2_date)
+                carst_featuretrack(file1_url, file1_date, file2_url, file2_date, params=self.ft_params)
                 self.results = rasterio.open(selected_list_time[0].strftime('%Y%m%d') + '-' + selected_list_time[1].strftime('%Y%m%d') + '_velo-raw_mag.tif')
             elif self.kernelselection.value == 'ITS_LIVE (online ready)':
                 print(self.menuright.value)
                 with fsspec.open(self.menuright.value[0]) as fobj:
                     self.results = xr.open_dataset(fobj)
-
                     
+    # ==== Initialize feature tracking parameters
+    
+    def init_ft_params(self):
+        self.ft_params = FTParams()
+        
+    def show_ft_params(self):
+        sld1 = iwg.IntSlider(value=self.ft_params.pxsettings['refwindow_x'], step=16, min=16, max=256)
+        sld2 = iwg.IntSlider(value=self.ft_params.pxsettings['searchwindow_x'], step=16, min=16, max=256)
+        sld3 = iwg.IntSlider(value=self.ft_params.pxsettings['skip_across'], step=1, min=1, max=256)
+        return iwg.VBox([sld1, sld2, sld3])
+        
+        
+class FTParams:
+    
+    def __init__(self):
+        self.imagepair     = {'image1': None, 
+                              'image1_date': None, 
+                              'image2': None, 
+                              'image2_date': None}
+        self.pxsettings    = {'refwindow_x': 64,
+                              'refwindow_y': 64,
+                              'searchwindow_x': 20,
+                              'searchwindow_y': 20,
+                              'skip_across': 64,
+                              'skip_down': 64,
+                              'oversampling': 16,
+                              'threads': 8,
+                              'gaussian_hp': False,
+                              'gaussian_hp_sigma': 3.0}
+        self.outputcontrol = {'datepair_prefix': True,
+                              'output_folder': '.'}
+        self.rawoutput     = {'if_generate_ampofftxt': False,
+                              'if_generate_xyztext': False,
+                              'label_ampcor': 'ampoff',
+                              'label_geotiff': 'velo-raw'}
+        
+    def VerifyParams(self):
+
+        """
+        Verify params and modify them to proper types.
+        """
+
+        if hasattr(self, 'pxsettings'):
+            if 'size_across' not in self.pxsettings:
+                self.pxsettings['size_across'] = None
+            if 'size_down' not in self.pxsettings:
+                self.pxsettings['size_down'] = None
+
+        if hasattr(self, 'outputcontrol'):
+            if 'datepair_prefix' in self.outputcontrol:
+                if self.outputcontrol['datepair_prefix'] in ['false', 'f', 'no', 'n', '0']:
+                    self.outputcontrol['if_generate_xyztext'] = False
+                else:
+                    self.outputcontrol['datepair_prefix'] = bool(int(self.outputcontrol['datepair_prefix']))
+                    atime = datetime.strptime(self.imagepair['image1_date'], '%Y-%m-%d')
+                    btime = datetime.strptime(self.imagepair['image2_date'], '%Y-%m-%d')
+                    self.outputcontrol['label_datepair'] = atime.strftime('%Y%m%d') + '-' + btime.strftime('%Y%m%d' + '_')
+        if hasattr(self, 'rawoutput'):
+            if 'label_ampcor' in self.rawoutput:
+                if self.outputcontrol['datepair_prefix'] not in ['false', 'f', 'no', 'n', '0']:
+                    self.rawoutput['label_ampcor'] = os.path.join(self.outputcontrol['output_folder'], self.outputcontrol['label_datepair'] + self.rawoutput['label_ampcor'])
+                else:
+                    self.rawoutput['label_ampcor'] = os.path.join(self.outputcontrol['output_folder'], self.rawoutput['label_ampcor'])
+            if 'label_geotiff' in self.rawoutput:
+                if self.outputcontrol['datepair_prefix'] not in ['false', 'f', 'no', 'n', '0']:
+                    self.rawoutput['label_geotiff'] = os.path.join(self.outputcontrol['output_folder'], self.outputcontrol['label_datepair'] + self.rawoutput['label_geotiff'])
+                else:
+                    self.rawoutput['label_geotiff'] = os.path.join(self.outputcontrol['output_folder'], self.rawoutput['label_geotiff'])
+
 # CARST feature tracking workflow                    
 
-def carst_featuretrack(file1_url, file1_date, file2_url, file2_date, inipath='param.ini'):
-    ini = ConfParams(inipath)
-    ini.ReadParam()
+def carst_featuretrack(file1_url, file1_date, file2_url, file2_date, params=None, inipath='param.ini'):
+    if params is not None:
+        ini = params
+    else:
+        ini = ConfParams(inipath)
+        ini.ReadParam()
     ini.imagepair['image1'] = file1_url
     ini.imagepair['image2'] = file2_url
     ini.imagepair['image1_date'] = file1_date
     ini.imagepair['image2_date'] = file2_date
-    ini.VerifyParam()
+    ini.VerifyParams()
     a = SingleRaster(file1_url, date=file1_date)
     b = SingleRaster(file2_url, date=file2_date)
     if ini.pxsettings['gaussian_hp']:
