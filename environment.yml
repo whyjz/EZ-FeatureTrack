@@ -21,3 +21,4 @@ dependencies:
     - requests
     - aiohttp
     - h5netcdf
+    - ipympl
