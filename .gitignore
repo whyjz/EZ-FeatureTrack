@@ -1,6 +1,7 @@
 # User defined
 *.vrt
 *.tif
+*.TIF
 *.tiff
 *.p
 *.aux.xml

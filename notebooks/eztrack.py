@@ -17,6 +17,41 @@ import rasterio
 import fsspec
 from datetime import datetime
 
+import subprocess
+
+
+# CARST monkey patch (to temporarily resolve .tiff vs .tif issue)
+
+def Unify(self, params):
+    """ Use gdalwarp to clip, reproject, and resample a DEM using a given set of params (which can 'unify' all DEMs). """
+
+    print('Calling Gdalwarp...')
+    fpath_warped = self.fpath[:-5] + '_warped' + self.fpath[-5:]
+    if 'output_dir' in params:
+        newpath = '/'.join([params['output_dir'], fpath_warped.split('/')[-1]])
+    else:
+        # for pixel tracking (temporarily)
+        newfolder = 'test_folder'
+        if not os.path.exists(newfolder):
+            os.makedirs(newfolder)
+        newpath = '/'.join([newfolder, fpath_warped.split('/')[-1]])
+        newpath = newpath.replace(newpath.split('.')[-1], 'img')
+    gdalwarp_cmd = 'gdalwarp -t_srs ' + params['t_srs'] + ' -tr ' + params['tr'] + ' -te ' + params['te']
+    if 'of' in params:
+        gdalwarp_cmd += ' -of ' + params['of']
+    if 'ot' in params:
+        gdalwarp_cmd += ' -ot ' + params['ot']
+    gdalwarp_cmd += ' -overwrite ' + self.fpath + ' ' + newpath
+    print(gdalwarp_cmd)
+    retcode = subprocess.call(gdalwarp_cmd, shell=True)
+    if retcode != 0:
+        print('Gdalwarp failed. Please check if all the input parameters are properly set.')
+        sys.exit(retcode)
+    self.fpath = newpath
+
+SingleRaster.Unify = Unify
+
+
 # Adapted from Alice's AGU talk
 
 class eztrack_ui():
@@ -40,9 +75,12 @@ class eztrack_ui():
         self.runft_btn = None
         self.map_polygon = None
         self.spatial_index = spatial_index
-        self.output = None       # print message output
+        self.output = iwg.Output()   # print message output
         self.results = None
         self.ft_params = None     # feature tracking parameters
+        self.sld1 = None         # param slider #1
+        self.sld2 = None         # param slider #2
+        self.sld3 = None         # param slider #3
         
     def init_panelleft(self):
         self.ui_title = iwg.HTML("<h2>Drag the marker to your region of interest</h2>")
@@ -109,7 +147,6 @@ class eztrack_ui():
     # ==== search button click callback
 
     def _on_searchbutton_clicked(self, event):
-        self.output = iwg.Output()
         # global pr_scene_list
         with self.output:
             if self.kernelselection.value == 'CARST':
@@ -157,10 +194,25 @@ class eztrack_ui():
         self.ft_params = FTParams()
         
     def show_ft_params(self):
-        sld1 = iwg.IntSlider(value=self.ft_params.pxsettings['refwindow_x'], step=16, min=16, max=256)
-        sld2 = iwg.IntSlider(value=self.ft_params.pxsettings['searchwindow_x'], step=16, min=16, max=256)
-        sld3 = iwg.IntSlider(value=self.ft_params.pxsettings['skip_across'], step=1, min=1, max=256)
-        return iwg.VBox([sld1, sld2, sld3])
+        self.sld1 = iwg.IntSlider(value=self.ft_params.pxsettings['refwindow_x'], step=16, min=16, max=256, description='reference window size')
+        self.sld2 = iwg.IntSlider(value=self.ft_params.pxsettings['searchwindow_x'], step=1, min=16, max=128, description='search window size')
+        self.sld3 = iwg.IntSlider(value=self.ft_params.pxsettings['skip_across'], step=1, min=1, max=256, description='skip size')
+        self.sld1.observe(self._on_param_change_sld1, names='value')
+        self.sld2.observe(self._on_param_change_sld2, names='value')
+        self.sld3.observe(self._on_param_change_sld3, names='value')
+        return iwg.VBox([self.sld1, self.sld2, self.sld3])
+    
+    def _on_param_change_sld1(self, change):
+        self.ft_params.pxsettings['refwindow_x'] = self.sld1.value
+        self.ft_params.pxsettings['refwindow_y'] = self.sld1.value
+        
+    def _on_param_change_sld2(self, change):
+        self.ft_params.pxsettings['searchwindow_x'] = self.sld2.value
+        self.ft_params.pxsettings['searchwindow_y'] = self.sld2.value
+        
+    def _on_param_change_sld3(self, change):
+        self.ft_params.pxsettings['skip_across'] = self.sld3.value
+        self.ft_params.pxsettings['skip_down'] = self.sld3.value
         
         
 class FTParams:
@@ -235,6 +287,13 @@ def carst_featuretrack(file1_url, file1_date, file2_url, file2_date, params=None
     ini.VerifyParams()
     a = SingleRaster(file1_url, date=file1_date)
     b = SingleRaster(file2_url, date=file2_date)
+    # ========== Unifying LS8 image extent ========== 
+    te_a = a.GetExtent()
+    tr_a = (a.GetXRes(), -a.GetYRes())
+    t_srs_a = a.GetProj4()
+    params_unify = {'output_dir': '.', 't_srs': '"' + t_srs_a + '"', 'tr': '{} {}'.format(*tr_a), 'te': '{} {} {} {}'.format(te_a[0], te_a[3], te_a[2], te_a[1])}
+    b.Unify(params_unify)
+    # ===============================================
     if ini.pxsettings['gaussian_hp']:
         a.GaussianHighPass(sigma=ini.pxsettings['gaussian_hp_sigma'])
         b.GaussianHighPass(sigma=ini.pxsettings['gaussian_hp_sigma'])
@@ -249,8 +308,6 @@ def carst_featuretrack(file1_url, file1_date, file2_url, file2_date, params=None
     ampoff.Ampcoroff2Velo()
     ampoff.Velo2XYV(generate_xyztext=ini.rawoutput['if_generate_xyztext'])
     ampoff.XYV2Raster()
-
-
 
 
 
